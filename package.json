@@ -1,0 +1,17 @@
+{
+  "name": "ltd-sandy-shores",
+  "version": "2.1.0",
+  "private": true,
+  "description": "LTD Sandy Shores web app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "dependencies": {
+    "discord.js": "14.22.1",
+    "express": "5.1.0"
+  }
+}
