@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK || '';
+const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || process.env.WEBHOOK_URL || '';
 const JS_GET = process.env.JSONSTORAGE_GET_URL || 'https://api.jsonstorage.net/v1/json/2f2bc2b0-9d3a-4d2e-b3b3-517b33ed9011/d17176bc-b948-4513-9617-d9531eb9febe';
 const JS_PUT = process.env.JSONSTORAGE_PUT_URL || 'https://api.jsonstorage.net/v1/json/2f2bc2b0-9d3a-4d2e-b3b3-517b33ed9011/d17176bc-b948-4513-9617-d9531eb9febe?apiKey=b34dac67-5c67-4ddd-8ed4-e0337941bfdb';
 const CACHE_FILE = path.join(__dirname, 'data-cache.json');
@@ -71,7 +71,8 @@ async function sendDiscord(order){
       timestamp:new Date().toISOString()
     }]
   };
-  const r=await fetch(DISCORD_WEBHOOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(embed)});
+  const target = DISCORD_WEBHOOK + (DISCORD_WEBHOOK.includes('?') ? '&' : '?') + 'wait=true';
+  const r=await fetch(target,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(embed)});
   if(!r.ok) return {ok:false,error:`Discord ${r.status}: ${(await r.text()).slice(0,300)}`};
   return {ok:true};
 }
@@ -126,6 +127,24 @@ app.post('/api/discord/status', async (req,res)=>{
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
 
+
+app.get('/api/test-webhook', async (req,res)=>{
+  try{
+    if(!DISCORD_WEBHOOK) return res.status(500).json({ok:false,error:'Webhook Discord non configuré sur Render',acceptedEnvNames:['DISCORD_WEBHOOK','DISCORD_WEBHOOK_URL','WEBHOOK_URL']});
+    const target = DISCORD_WEBHOOK + (DISCORD_WEBHOOK.includes('?') ? '&' : '?') + 'wait=true';
+    const r = await fetch(target,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content:'✅ Test webhook LTD Sandy Shores — connexion Discord OK.'})
+    });
+    const body = await r.text();
+    if(!r.ok) return res.status(502).json({ok:false,status:r.status,error:body.slice(0,500)});
+    res.json({ok:true,status:r.status,message:'Message test envoyé sur Discord'});
+  }catch(e){
+    res.status(500).json({ok:false,error:e.message});
+  }
+});
+
 app.get('/api/status', async (req,res)=>{
   let storage=false, storageError='';
   try{ await getRemoteData(); storage=true; } catch(e){ storageError=e.message; }
@@ -135,4 +154,7 @@ app.get('/api/status', async (req,res)=>{
 app.get('/health',(req,res)=>res.status(200).json({ok:true}));
 app.use((req,res,next)=>{ if(req.method!=='GET'||req.path.startsWith('/api/'))return next(); res.sendFile(path.join(__dirname,'index.html')); });
 app.use((req,res)=>res.status(404).json({ok:false,error:'Not found'}));
-app.listen(PORT,'0.0.0.0',()=>console.log('LTD Sandy Shores on port',PORT));
+app.listen(PORT,'0.0.0.0',()=>{
+  console.log('LTD Sandy Shores on port',PORT);
+  console.log('Discord webhook configured:', Boolean(DISCORD_WEBHOOK));
+});
