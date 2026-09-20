@@ -34,18 +34,36 @@ async function saveRemoteData(data){
   return true;
 }
 async function getDataSafe(){
+  const cache = readCache();
   try {
-    const data = await getRemoteData();
+    const remote = await getRemoteData();
+    // Never lose locally cached orders if the remote store is empty/stale.
+    const mergedOrders = new Map();
+    for (const o of (cache.orders||[])) if (o?.id) mergedOrders.set(o.id,o);
+    for (const o of (remote.orders||[])) if (o?.id) mergedOrders.set(o.id,o);
+    const data = {
+      ...emptyData(),
+      ...cache,
+      ...remote,
+      orders:[...mergedOrders.values()]
+    };
     writeCache(data);
-    return {data, source:'remote'};
+    return {data, source:'remote+cache'};
   } catch(e) {
     console.error('Remote load failed:',e.message);
-    return {data:readCache(), source:'cache'};
+    return {data:{...emptyData(),...cache}, source:'cache'};
   }
 }
 async function persistData(data){
-  writeCache(data); // immediate fallback cache
-  await saveRemoteData(data); // persistent remote storage
+  // Local server cache is written first and never depends on the remote service.
+  writeCache(data);
+  try {
+    await saveRemoteData(data);
+    return {ok:true};
+  } catch(e) {
+    console.error('Remote save failed:',e.message);
+    return {ok:false,error:e.message};
+  }
 }
 async function sendDiscord(order){
   if(!DISCORD_WEBHOOK) return {ok:false,error:'DISCORD_WEBHOOK non configuré'};
@@ -83,24 +101,41 @@ app.get('/api/data', async (req,res)=>{
 });
 
 app.post('/api/save', async (req,res)=>{
-  try { await persistData({...emptyData(),...req.body}); res.json({ok:true}); }
-  catch(e){ console.error('Save failed:',e.message); res.status(502).json({ok:false,error:e.message}); }
+  try { const result=await persistData({...emptyData(),...req.body}); res.status(result.ok?200:207).json({ok:true,cached:true,remote:result}); }
+  catch(e){ console.error('Save failed:',e.message); res.status(500).json({ok:false,error:e.message}); }
 });
 
-// Atomic order creation: append -> persist -> Discord, all server-side.
+// Order creation: cache immediately, then remote persistence and Discord independently.
+// A storage outage must never prevent the Discord notification from being sent.
 app.post('/api/orders', async (req,res)=>{
   try{
     const order=req.body;
-    if(!order || !order.id || !order.company || !Array.isArray(order.products)) return res.status(400).json({ok:false,error:'Commande invalide'});
+    if(!order || !order.id || !order.company || !Array.isArray(order.products)) {
+      return res.status(400).json({ok:false,error:'Commande invalide'});
+    }
+
     const {data}=await getDataSafe();
     const current={...emptyData(),...data};
     if(!current.orders.some(o=>o.id===order.id)) current.orders.push(order);
-    await persistData(current);
-    const discord=await sendDiscord(order);
-    res.status(discord.ok?200:207).json({ok:true,saved:true,discord});
+
+    // Guarantee an immediate server-side cache before any network dependency.
+    writeCache(current);
+
+    const [storage, discord] = await Promise.all([
+      persistData(current),
+      sendDiscord(order).catch(e=>({ok:false,error:e.message}))
+    ]);
+
+    res.status(discord.ok ? 200 : 207).json({
+      ok:true,
+      saved:true,
+      cached:true,
+      remote:storage,
+      discord
+    });
   }catch(e){
     console.error('Order create failed:',e.message);
-    res.status(502).json({ok:false,saved:false,error:e.message});
+    res.status(500).json({ok:false,saved:false,error:e.message});
   }
 });
 
