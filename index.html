@@ -293,6 +293,17 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
 .data-table th{background:var(--brown-dark)!important;color:var(--gold-light)!important}
 .contacts-table th{background:var(--brown-dark)!important;color:var(--gold-light)!important}
 @media(max-width:600px){.product-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.content{padding:1rem}.topbar{padding:.8rem 1rem}}
+
+.admin-save-wrap{display:none;align-items:center;gap:.65rem}
+.admin-save-wrap.visible{display:flex}
+.save-state{font-size:10px;font-weight:800;letter-spacing:.04em;padding:.42rem .65rem;border-radius:999px;border:1px solid var(--border);background:#F7EBD8;color:var(--text-muted);white-space:nowrap}
+.save-state.dirty{background:#FFF0D2;color:#7A4A00;border-color:#D8B77A}
+.save-state.saving{background:#F2EBDD;color:var(--brown-mid)}
+.save-state.saved{background:#E7F3EA;color:#2E6A42;border-color:#A9CEB5}
+.admin-save-btn{border:0;border-radius:4px;background:var(--brown);color:#fff;padding:.58rem .9rem;font-size:11px;font-family:'Lato',sans-serif;font-weight:800;cursor:pointer;box-shadow:0 3px 10px rgba(63,39,24,.18)}
+.admin-save-btn:hover{background:var(--brown-mid)}
+.admin-save-btn:disabled{opacity:.55;cursor:default}
+
 </style>
 </head>
 <body>
@@ -348,6 +359,10 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
     <div class="topbar">
       <div class="topbar-title" id="topbar-title">Commande — <span>Panel Utilisateur</span></div>
       <div class="topbar-right">
+        <div class="admin-save-wrap" id="admin-save-wrap">
+          <span class="save-state saved" id="save-state">✅ Tout est sauvegardé</span>
+          <button class="admin-save-btn" id="admin-save-btn" onclick="saveAllAdminChanges()">💾 Sauvegarder</button>
+        </div>
         <button class="topbar-btn" onclick="doLogout()" title="Déconnexion">🚪</button>
       </div>
     </div>
@@ -424,13 +439,11 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
 <div class="warn-overlay" id="warn-overlay">
   <div class="warn-box">
     <div class="warn-icon">⚠️</div>
-    <div class="warn-title">Confirmer la suppression</div>
-    <div class="warn-text" id="warn-text">Cette action est irréversible.</div>
-    <div class="warn-countdown" id="warn-cd">5</div>
-    <div class="warn-bar-wrap"><div class="warn-bar" id="warn-bar"></div></div>
+    <div class="warn-title" id="warn-title">Êtes-vous sûr ?</div>
+    <div class="warn-text" id="warn-text">Confirmez cette action.</div>
     <div class="warn-actions">
       <button class="warn-cancel" onclick="cancelWarn()">✕ Annuler</button>
-      <button class="warn-confirm" id="warn-confirm-btn" disabled onclick="confirmWarn()">🗑 Supprimer</button>
+      <button class="warn-confirm" id="warn-confirm-btn" onclick="confirmWarn()">Confirmer</button>
     </div>
   </div>
 </div>
@@ -457,6 +470,63 @@ let orders=[];
 let companies=[];
 let products=[];
 let categories=[];
+
+const FULL_CACHE_KEY='ltd_full_data_v2';
+const ADMIN_DIRTY_KEY='ltd_admin_unsaved_v1';
+let dataUpdatedAt=0;
+let adminDirty=localStorage.getItem(ADMIN_DIRTY_KEY)==='1';
+let adminSaving=false;
+function updateSaveUI(state){
+  const wrap=document.getElementById('admin-save-wrap');
+  const badge=document.getElementById('save-state');
+  const btn=document.getElementById('admin-save-btn');
+  if(!wrap||!badge||!btn)return;
+  wrap.classList.toggle('visible',mode==='admin');
+  badge.className='save-state '+state;
+  if(state==='dirty'){badge.textContent='● Modifications non sauvegardées';btn.disabled=false}
+  else if(state==='saving'){badge.textContent='⏳ Sauvegarde en cours...';btn.disabled=true}
+  else{badge.textContent='✅ Tout est sauvegardé';btn.disabled=false}
+}
+function markAdminDirty(){
+  dataUpdatedAt=Date.now();
+  adminDirty=true;
+  localStorage.setItem(ADMIN_DIRTY_KEY,'1');
+  saveFullLocal();
+  updateSaveUI('dirty');
+}
+async function saveAllAdminChanges(){
+  if(adminSaving)return;
+  adminSaving=true;updateSaveUI('saving');
+  const ok=await pushToServer({manual:true,requireRemote:true});
+  adminSaving=false;
+  if(ok){adminDirty=false;localStorage.removeItem(ADMIN_DIRTY_KEY);updateSaveUI('saved');showToast('✅ Toutes les modifications sont sauvegardées',3000)}
+  else{adminDirty=true;updateSaveUI('dirty');showToast('⚠ Sauvegarde distante impossible — réessayez',4000)}
+}
+
+function snapshotState(){
+  return {orders,companies,products,categories,updatedAt:dataUpdatedAt||Date.now()};
+}
+function saveFullLocal(){
+  try{
+    if(!dataUpdatedAt) dataUpdatedAt=Date.now();
+    localStorage.setItem(FULL_CACHE_KEY,JSON.stringify(snapshotState()));
+    localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
+  }catch(e){console.error('Local save failed',e)}
+}
+function readFullLocal(){
+  try{
+    const d=JSON.parse(localStorage.getItem(FULL_CACHE_KEY)||'null');
+    return d&&typeof d==='object'?d:null;
+  }catch{return null}
+}
+function applyState(d){
+  if(!d||typeof d!=='object')return;
+  orders=Array.isArray(d.orders)?d.orders:orders;
+  companies=Array.isArray(d.companies)?d.companies:companies;
+  products=Array.isArray(d.products)?d.products:products;
+  categories=Array.isArray(d.categories)?d.categories:categories;
+  dataUpdatedAt=Number(d.updatedAt||d._updatedAt||0)||dataUpdatedAt;
+}
 
 function defaultProducts(){return[
   {id:"creme-glacee-rose-1", cat:"Boutique", icon:"🛒", name:"Crème glacée (rose)", unit:'0.5', price:2},
@@ -588,51 +658,64 @@ function applySmartProductIcons(list){
 
 // ═══ SERVER ═══
 async function loadFromServer(){
+  const local=readFullLocal();
   try{
-    const r=await fetch('/api/data');
+    const r=await fetch('/api/data',{cache:'no-store'});
     if(!r.ok) throw new Error('Chargement serveur impossible');
     const d=await r.json();
-    const cachedOrders=JSON.parse(localStorage.getItem('ltd_orders_cache')||'[]');
-    const remoteOrders=(d.orders&&Array.isArray(d.orders))?d.orders:[];
-    const merged=new Map();
-    [...cachedOrders,...remoteOrders].forEach(o=>{if(o&&o.id)merged.set(o.id,o)});
-    orders=[...merged.values()].sort((a,b)=>(a.createdTs||0)-(b.createdTs||0));
-    localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
-    if(d.companies&&Array.isArray(d.companies)){
-      companies=d.companies;
+    const serverTs=Number(d.updatedAt||d._updatedAt||0)||0;
+    const localTs=Number(local?.updatedAt||0)||0;
+
+    // La version la plus récente gagne. Une vieille copie serveur ne peut plus effacer les changements locaux.
+    if(local && localTs>serverTs){
+      applyState(local);
       DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
-    }else{companies=[...DEFAULT_COMPANIES]}
-    const catalogue=defaultProducts();
-    const existing=(d.products&&Array.isArray(d.products))?d.products:[];
-    const byId=new Map(existing.map(p=>[p.id,p]));
-    products=applySmartProductIcons(catalogue.map(p=>{
-      const old=byId.get(p.id);
-      return old ? {...p, ...old, name:p.name, cat:p.cat} : p;
-    }));
-    // Le fichier Excel est la source du catalogue : les anciens articles
-    // absents de la grille sont retirés et les nouveaux sont ajoutés.
-    const changed=existing.length!==products.length ||
-      existing.some((p,i)=>p.id!==products[i]?.id || p.name!==products[i]?.name || p.price!==products[i]?.price);
-    categories=(d.categories&&Array.isArray(d.categories)&&d.categories.length)?d.categories:[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
-    if(changed) pushToServer();
+      if(!products.length) products=applySmartProductIcons(defaultProducts());
+      if(!categories.length) categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+      saveFullLocal();
+      // Si ces changements attendent une validation admin, ne pas les envoyer automatiquement.
+      if(!adminDirty) pushToServer({silent:true,keepTimestamp:true});
+      return;
+    }
+
+    orders=Array.isArray(d.orders)?d.orders:[];
+    companies=Array.isArray(d.companies)?d.companies:[];
+    products=Array.isArray(d.products)&&d.products.length?applySmartProductIcons(d.products):applySmartProductIcons(defaultProducts());
+    categories=Array.isArray(d.categories)&&d.categories.length?d.categories:[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+    dataUpdatedAt=serverTs||Date.now();
+    DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
+    saveFullLocal();
   }catch(e){
-    companies=[...DEFAULT_COMPANIES];
-    products=applySmartProductIcons(defaultProducts());
-    categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+    console.error(e);
+    if(local){
+      applyState(local);
+    }else{
+      companies=[...DEFAULT_COMPANIES];
+      products=applySmartProductIcons(defaultProducts());
+      categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+      dataUpdatedAt=Date.now();
+    }
+    DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
+    saveFullLocal();
   }
 }
 
-async function pushToServer(){
+async function pushToServer(opts={}){
+  if(!opts.keepTimestamp) dataUpdatedAt=Date.now();
+  saveFullLocal(); // sauvegarde immédiate AVANT le réseau
+  const payload={orders,companies,products,categories,updatedAt:dataUpdatedAt};
   try{
-    const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({orders,companies,products,categories})
-    });
-    if(!r.ok) throw new Error('Sauvegarde serveur impossible');
-    localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
+    const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const result=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(result.error||'Sauvegarde serveur impossible');
+    if(result.remote && result.remote.ok===false){
+      if(!opts.silent) showToast('⚠ Sauvegardé localement, stockage distant indisponible',3500);
+      if(opts.requireRemote) return false;
+    }
     return true;
   }catch(e){
-    localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
     console.error(e);
+    if(!opts.silent) showToast('⚠ Sauvegardé sur cet appareil, serveur indisponible',3500);
     return false;
   }
 }
@@ -644,23 +727,18 @@ function genPW(){const c='ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789
 function genId(){return 'co_'+Date.now()+'_'+Math.random().toString(36).substr(2,4)}
 
 // ═══ WARNING ═══
-function showWarn(text,cb){
+function showWarn(text,cb,actionLabel){
   warnCb=cb;
+  const label=actionLabel||(text.toLowerCase().includes('suspend')?'Suspendre':text.toLowerCase().includes('réactiv')||text.toLowerCase().includes('reactiv')?'Réactiver':text.toLowerCase().includes('supprim')?'Supprimer':'Confirmer');
+  document.getElementById('warn-title').textContent='Êtes-vous sûr ?';
   document.getElementById('warn-text').textContent=text;
-  document.getElementById('warn-cd').textContent='5';
-  const bar=document.getElementById('warn-bar');
-  bar.style.transition='none';bar.style.width='100%';
-  document.getElementById('warn-confirm-btn').disabled=true;
+  const btn=document.getElementById('warn-confirm-btn');
+  btn.disabled=false;
+  btn.textContent=(label==='Supprimer'?'🗑 ':label==='Suspendre'?'⏸ ':label==='Réactiver'?'▶ ':'✓ ')+label;
   document.getElementById('warn-overlay').classList.add('open');
-  let t=5;
-  setTimeout(()=>{bar.style.transition='width 5s linear';bar.style.width='0%'},50);
-  warnTimer=setInterval(()=>{
-    t--;document.getElementById('warn-cd').textContent=t;
-    if(t<=0){clearInterval(warnTimer);document.getElementById('warn-confirm-btn').disabled=false}
-  },1000);
 }
-function cancelWarn(){clearInterval(warnTimer);document.getElementById('warn-overlay').classList.remove('open');warnCb=null}
-function confirmWarn(){clearInterval(warnTimer);document.getElementById('warn-overlay').classList.remove('open');if(warnCb){warnCb();warnCb=null}}
+function cancelWarn(){document.getElementById('warn-overlay').classList.remove('open');warnCb=null}
+function confirmWarn(){document.getElementById('warn-overlay').classList.remove('open');if(warnCb){const cb=warnCb;warnCb=null;cb()}}
 
 // ═══ LOGIN ═══
 function loginShow(t){
@@ -698,7 +776,7 @@ function doLogout(){
 function launchApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').classList.add('visible');
-  if(mode==='company') setupCompanyApp();
+  if(mode==='company'){updateSaveUI('saved');setupCompanyApp();}
   else setupAdminApp();
 }
 
@@ -708,6 +786,7 @@ function setTopbar(title,sub){
 
 // ═══ COMPANY APP ═══
 function setupCompanyApp(){
+  document.getElementById('admin-save-wrap')?.classList.remove('visible');
   const fresh=companies.find(c=>c.id===curCo.id);
   if(fresh)curCo={...fresh};
   document.getElementById('sb-name').textContent=curCo.name;
@@ -1022,6 +1101,7 @@ function deleteContact(i){
 
 // ═══ ADMIN APP ═══
 function setupAdminApp(){
+  updateSaveUI(adminDirty?'dirty':'saved');
   const acc=Object.values(ADMIN_ACCS).find(a=>a.role===curAdmRole);
   document.getElementById('sb-name').textContent='LTD Sandy Shores';
   document.getElementById('sb-role').textContent=acc?.label||'Admin';
@@ -1149,8 +1229,7 @@ function applyOrderStatus(id){
     const hi=hist.findIndex(h=>h.id===id);
     if(hi>=0){hist[hi].status=newStatus;localStorage.setItem(key,JSON.stringify(hist))}
   }
-  pushToServer();
-  notifyDiscordStatus(orders[idx]);
+  markAdminDirty();
   closeModal('order-detail-modal');
   renderAdminOrders(document.getElementById('main-content'));
   showToast('✅ Statut mis à jour : '+STATUS_LABELS[newStatus]);
@@ -1159,7 +1238,7 @@ function applyOrderStatus(id){
 function deleteOrderConfirm(id){
   showWarn('Supprimer la commande '+id+' ?',()=>{
     const idx=orders.findIndex(o=>o.id===id);
-    if(idx>=0){orders.splice(idx,1);pushToServer()}
+    if(idx>=0){orders.splice(idx,1);markAdminDirty()}
     closeModal('order-detail-modal');
     renderAdminOrders(document.getElementById('main-content'));
     showToast('✅ Commande supprimée');
@@ -1234,7 +1313,7 @@ function addProduct(){
   if(cat==='__new'){cat=prompt('Nom de la nouvelle catégorie :','Nouvelle catégorie')?.trim()||''; if(!cat)return; if(!categories.find(c=>c.name===cat))categories.push({name:cat,icon:prompt('Icône de la catégorie :','📦')||'📦'});}
   if(!name||isNaN(price)||!cat){showToast('⚠ Nom, prix et catégorie requis');return}
   products.push({id:'prod_'+Date.now(),icon,name,unit:unit||'0.5',price,cat});
-  pushToServer();['np-icon','np-name','np-unit','np-price'].forEach(id=>document.getElementById(id).value='');
+  markAdminDirty();['np-icon','np-name','np-unit','np-price'].forEach(id=>document.getElementById(id).value='');
   renderAdminProducts(document.getElementById('main-content'));showToast('✅ Produit ajouté');
 }
 
@@ -1244,37 +1323,37 @@ function editProd(i){
   const price=parseFloat(prompt('Prix ($) :',p.price));if(isNaN(price))return;
   const icon=prompt('Icône :',p.icon)||p.icon;
   products[i]={...p,name,price,icon};
-  pushToServer();renderProdGrid(true);showToast('✅ Produit modifié');
+  markAdminDirty();renderProdGrid(true);showToast('✅ Produit modifié');
 }
 
 function toggleDestockage(i){
   products[i].destockage=!products[i].destockage;
-  pushToServer();renderProdGrid(true);
+  markAdminDirty();renderProdGrid(true);
   showToast(products[i].destockage?'🏷 Déstockage activé':'✅ Déstockage désactivé');
 }
 
 function deleteProd(i){
   showWarn('Supprimer "'+products[i].name+'" ?',()=>{
-    products.splice(i,1);pushToServer();renderProdGrid(true);showToast('✅ Produit supprimé');
+    products.splice(i,1);markAdminDirty();renderProdGrid(true);showToast('✅ Produit supprimé');
   });
 }
 
 function addCategory(){
   const name=prompt('Nom de la catégorie :','Nouvelle catégorie')?.trim(); if(!name)return;
   if(categories.some(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Catégorie déjà existante');return}
-  const icon=prompt('Icône :','📦')||'📦'; categories.push({name,icon}); pushToServer(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie créée');
+  const icon=prompt('Icône :','📦')||'📦'; categories.push({name,icon}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie créée');
 }
 function editCategory(i){
-  const c=categories[i]; const name=prompt('Nom :',c.name)?.trim(); if(!name)return; const icon=prompt('Icône :',c.icon)||c.icon; const old=c.name; categories[i]={name,icon}; products.forEach(p=>{if(p.cat===old)p.cat=name}); pushToServer(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie modifiée');
+  const c=categories[i]; const name=prompt('Nom :',c.name)?.trim(); if(!name)return; const icon=prompt('Icône :',c.icon)||c.icon; const old=c.name; categories[i]={name,icon}; products.forEach(p=>{if(p.cat===old)p.cat=name}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie modifiée');
 }
 function deleteCategory(i){
   const c=categories[i]; if(products.some(p=>p.cat===c.name)){showToast('⚠ Cette catégorie contient encore des produits');return}
-  showWarn('Supprimer la catégorie « '+c.name+' » ?',()=>{categories.splice(i,1);pushToServer();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catégorie supprimée')});
+  showWarn('Supprimer la catégorie « '+c.name+' » ?',()=>{categories.splice(i,1);markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catégorie supprimée')});
 }
 
 function resetCatalogue(){
   showWarn('Réinitialiser tout le catalogue aux prix par défaut ?',()=>{
-    products=applySmartProductIcons(defaultProducts());categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));pushToServer();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catalogue réinitialisé');
+    products=applySmartProductIcons(defaultProducts());categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catalogue réinitialisé');
   });
 }
 
@@ -1322,7 +1401,7 @@ function createCompany(){
   if(companies.find(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Entreprise déjà existante');return}
   const pw=genPW();
   companies.push({id:genId(),name,password:pw,note,customPrices:{},active:true,createdAt:new Date().toLocaleDateString('fr-FR'),contacts:[],iban:''});
-  pushToServer();
+  markAdminDirty();
   document.getElementById('nco-name').value='';document.getElementById('nco-note').value='';
   renderCoGrid(true);
   navigator.clipboard.writeText(pw).catch(()=>{});
@@ -1330,16 +1409,26 @@ function createCompany(){
 }
 
 function resetCoMdp(i){
-  const pw=genPW();companies[i].password=pw;pushToServer();renderCoGrid(true);
+  const pw=genPW();companies[i].password=pw;markAdminDirty();renderCoGrid(true);
   navigator.clipboard.writeText(pw).catch(()=>{});
   showToast('✅ Nouveau mdp: '+pw,4000);
 }
 
-function toggleCoActive(i){companies[i].active=companies[i].active===false;pushToServer();renderCoGrid(true)}
+function toggleCoActive(i){
+  const co=companies[i];
+  const isSuspended=co.active===false;
+  const action=isSuspended?'Réactiver':'Suspendre';
+  showWarn(action+' l’entreprise « '+co.name+' » ?',()=>{
+    companies[i].active=isSuspended;
+    markAdminDirty();
+    renderCoGrid(true);
+    showToast(isSuspended?'✅ Entreprise réactivée':'⏸ Entreprise suspendue');
+  },action);
+}
 
 function deleteCo(i){
   showWarn('Supprimer "'+companies[i].name+'" ?',()=>{
-    companies.splice(i,1);pushToServer();renderCoGrid(true);showToast('✅ Entreprise supprimée');
+    companies.splice(i,1);markAdminDirty();renderCoGrid(true);showToast('✅ Entreprise supprimée');
   });
 }
 
@@ -1350,7 +1439,7 @@ function openCompanyInfo(i){
 }
 function openCompanySettings(i){
   const co=companies[i]; document.getElementById('company-settings-title').textContent='Réglages — '+co.name;
-  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="toggleCoActive(${i});closeModal('company-settings-modal')"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Supprimer définitivement l’entreprise.</small></div></button>`:''}</div>`;
+  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="closeModal('company-settings-modal');toggleCoActive(${i})"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Supprimer définitivement l’entreprise.</small></div></button>`:''}</div>`;
   document.getElementById('company-settings-actions').innerHTML=`<button class="btn-outline" onclick="closeModal('company-settings-modal')">Fermer</button>`; document.getElementById('company-settings-modal').classList.add('open');
 }
 function viewAsCompany(i){const co=companies[i];closeModal('company-settings-modal');curCo={...co};mode='company';sessionStorage.setItem('ltd_session',JSON.stringify({mode:'company',coId:co.id,preview:true}));launchApp();showToast('👁 Aperçu de '+co.name)}
@@ -1383,44 +1472,48 @@ function savePrices(){
   if(editCoIdx===null)return;
   const cp={};
   products.forEach(p=>{const v=document.getElementById('cp-'+p.id)?.value;if(v!==''&&v!==undefined&&!isNaN(parseFloat(v)))cp[p.id]=parseFloat(v)});
-  companies[editCoIdx].customPrices=cp;pushToServer();closeModal('price-modal');renderCoGrid(true);showToast('✅ Prix enregistrés');
+  companies[editCoIdx].customPrices=cp;markAdminDirty();closeModal('price-modal');renderCoGrid(true);showToast('💾 Prix modifiés — pensez à sauvegarder');
 }
 
 // ═══ SYNC ═══
 let syncInterval=null;
 async function syncFromServer(){
+  if(mode==='admin'&&adminDirty)return;
   try{
-    const r=await fetch('/api/data');const d=await r.json();
-    let changed=false;
-    if(d.orders&&Array.isArray(d.orders)){
-      const cached=JSON.parse(localStorage.getItem('ltd_orders_cache')||'[]');
-      const merged=new Map();[...cached,...d.orders].forEach(o=>{if(o&&o.id)merged.set(o.id,o)});
-      const next=[...merged.values()].sort((a,b)=>(a.createdTs||0)-(b.createdTs||0));
-      if(JSON.stringify(next)!==JSON.stringify(orders)){orders=next;changed=true}
-      localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
+    const r=await fetch('/api/data',{cache:'no-store'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const serverTs=Number(d.updatedAt||d._updatedAt||0)||0;
+    const localTs=Number(dataUpdatedAt||0)||0;
+
+    // Ne jamais écraser une modification locale récente avec une ancienne copie serveur.
+    if(localTs>serverTs){
+      if(!adminDirty) pushToServer({silent:true,keepTimestamp:true});
+      return;
     }
-    if(d.companies&&JSON.stringify(d.companies)!==JSON.stringify(companies)){
-      companies=d.companies;
-      DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
-      if(mode==='company'&&curCo){const fresh=companies.find(c=>c.id===curCo.id);if(fresh)curCo={...fresh}}
-      changed=true;
-    }
-    if(d.products&&d.products.length&&JSON.stringify(d.products)!==JSON.stringify(products)){products=d.products;changed=true}
-    if(d.categories&&JSON.stringify(d.categories)!==JSON.stringify(categories)){categories=d.categories;changed=true}
-    if(changed&&mode){
-      if(mode==='company'){
-        const fresh=companies.find(c=>c.id===curCo?.id);if(fresh)curCo={...fresh};
-        const active=document.querySelector('.nav-item.active')?.id||'';
-        if(active==='nav-hist') renderHistory(document.getElementById('main-content'));
-        if(active==='nav-cmd') renderCatalogue(document.getElementById('main-content'));
-      } else if(mode==='admin'){
-        const active=document.querySelector('.nav-item.active')?.id||'';
-        if(active==='nav-aorders') renderAdminOrders(document.getElementById('main-content'));
-      }
+    if(serverTs<=localTs)return;
+
+    applyState(d);
+    DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
+    if(!products.length)products=applySmartProductIcons(defaultProducts());
+    if(!categories.length)categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+    saveFullLocal();
+
+    if(mode==='company'){
+      if(curCo){const fresh=companies.find(c=>c.id===curCo.id);if(fresh)curCo={...fresh}}
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-hist') renderHistory(document.getElementById('main-content'));
+      if(active==='nav-cmd') renderCatalogue(document.getElementById('main-content'));
+    } else if(mode==='admin'){
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-aorders') renderAdminOrders(document.getElementById('main-content'));
+      if(active==='nav-aprod') renderAdminProducts(document.getElementById('main-content'));
+      if(active==='nav-aco') renderAdminCompanies(document.getElementById('main-content'));
     }
   }catch(e){}
 }
 function startSync(){if(syncInterval)return;syncInterval=setInterval(syncFromServer,6000)}
+window.addEventListener('beforeunload',e=>{if(mode==='admin'&&adminDirty){e.preventDefault();e.returnValue=''}});
 
 // ═══ INIT ═══
 (async function(){

@@ -34,24 +34,23 @@ async function saveRemoteData(data){
   return true;
 }
 async function getDataSafe(){
-  const cache = readCache();
+  const cache = {...emptyData(), ...readCache()};
   try {
-    const remote = await getRemoteData();
-    // Never lose locally cached orders if the remote store is empty/stale.
+    const remote = {...emptyData(), ...(await getRemoteData())};
+    const cacheTs = Number(cache.updatedAt||0)||0;
+    const remoteTs = Number(remote.updatedAt||0)||0;
+    // La copie la plus récente est la source principale. On fusionne seulement les commandes.
+    const newest = cacheTs > remoteTs ? cache : remote;
     const mergedOrders = new Map();
-    for (const o of (cache.orders||[])) if (o?.id) mergedOrders.set(o.id,o);
     for (const o of (remote.orders||[])) if (o?.id) mergedOrders.set(o.id,o);
-    const data = {
-      ...emptyData(),
-      ...cache,
-      ...remote,
-      orders:[...mergedOrders.values()]
-    };
+    for (const o of (cache.orders||[])) if (o?.id) mergedOrders.set(o.id,o);
+    const data = {...emptyData(), ...newest, orders:[...mergedOrders.values()]};
+    data.updatedAt = Math.max(cacheTs,remoteTs,Number(data.updatedAt||0)||0);
     writeCache(data);
-    return {data, source:'remote+cache'};
+    return {data, source: cacheTs>remoteTs ? 'cache-newer' : 'remote-newer'};
   } catch(e) {
     console.error('Remote load failed:',e.message);
-    return {data:{...emptyData(),...cache}, source:'cache'};
+    return {data:cache, source:'cache'};
   }
 }
 async function persistData(data){
@@ -101,7 +100,7 @@ app.get('/api/data', async (req,res)=>{
 });
 
 app.post('/api/save', async (req,res)=>{
-  try { const result=await persistData({...emptyData(),...req.body}); res.status(result.ok?200:207).json({ok:true,cached:true,remote:result}); }
+  try { const body={...emptyData(),...req.body}; body.updatedAt=Number(body.updatedAt||Date.now()); const result=await persistData(body); res.status(200).json({ok:true,cached:true,remote:result,updatedAt:body.updatedAt}); }
   catch(e){ console.error('Save failed:',e.message); res.status(500).json({ok:false,error:e.message}); }
 });
 
